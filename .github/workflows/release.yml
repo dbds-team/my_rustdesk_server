@@ -100,43 +100,65 @@ jobs:
 
       - name: Install NSIS
         run: |
-          choco install nsis -y
+          iwr -useb get.scoop.sh -outfile 'install.ps1'
+          .\install.ps1 -RunAsAdmin
+          scoop update
+          scoop bucket add extras
+          scoop install nsis
 
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      - name: Build UI
-        run: |
-          cd ui/html
-          npm install
-          npm run build
+      - name: Sign exe files
+        uses: GermanBluefox/code-sign-action@v7
+        if: false
+        with:
+          certificate: '${{ secrets.WINDOWS_PFX_BASE64 }}'
+          password: '${{ secrets.WINDOWS_PFX_PASSWORD }}'
+          certificatesha1: '${{ secrets.WINDOWS_PFX_SHA1_THUMBPRINT }}'
+          folder: 'target\x86_64-pc-windows-msvc\release'
+          recursive: false
 
-      - name: Build UI installer
+      - name: Build UI browser file
         run: |
-          cd ui
+          npm i
+          npm run build
+        working-directory: ./ui/html
+
+      - name: Build UI setup file
+        run: |
           rustup default stable
           cargo build --release
-          Copy-Item -Path "../target/${{ matrix.job.target }}/release/*.exe" -Destination "setup/bin/" -Force
-          Copy-Item -Path "target/release/*.exe" -Destination "setup/" -Force
-          New-Item -ItemType Directory -Path "setup/logs" -Force
+          xcopy /y ..\target\x86_64-pc-windows-msvc\release\*.exe setup\bin\
+          xcopy /y target\release\*.exe setup\
+          mkdir setup\logs
           makensis /V1 setup.nsi
-          New-Item -ItemType Directory -Path "SignOutput" -Force
-          Move-Item -Path "RustDeskServer.Setup.exe" -Destination "SignOutput/"
-          Copy-Item -Path "../target/${{ matrix.job.target }}/release/*.exe" -Destination "SignOutput/" -Force
+          mkdir SignOutput
+          mv RustDeskServer.Setup.exe SignOutput\
+          mv ..\target\x86_64-pc-windows-msvc\release\*.exe SignOutput\
+        working-directory: ./ui
 
-      - name: Package binaries
-        run: |
-          mkdir dist
-          cd ui/SignOutput
-          Compress-Archive -Path "*.exe" -DestinationPath "../../dist/rustdesk-server-windows-${{ matrix.job.name }}.zip"
+      - name: Sign UI setup file 
+        uses: GermanBluefox/code-sign-action@v7
+        if: false
+        with:
+          certificate: '${{ secrets.WINDOWS_PFX_BASE64 }}'
+          password: '${{ secrets.WINDOWS_PFX_PASSWORD }}'
+          certificatesha1: '${{ secrets.WINDOWS_PFX_SHA1_THUMBPRINT }}'
+          folder: './ui/SignOutput'
+          recursive: false
 
-      - name: Upload artifacts
+      - name: Publish Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-${{ matrix.job.name }}
-          path: dist/rustdesk-server-windows-${{ matrix.job.name }}.zip
+          name: binaries-windows-${{ matrix.job.name }}
+          path: |
+            ui\SignOutput\hbbr.exe
+            ui\SignOutput\hbbs.exe
+            ui\SignOutput\rustdesk-utils.exe
+            ui\SignOutput\RustDeskServer.Setup.exe
           if-no-files-found: error
 
   # macOS builds
@@ -251,7 +273,20 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release-files
-          find artifacts -name "*.tar.gz" -o -name "*.zip" | while read file; do
+          # Package Linux binaries
+          if [ -d "artifacts/linux-x86_64" ]; then
+            cd artifacts/linux-x86_64
+            tar -czf ../../release-files/rustdesk-server-linux-x86_64.tar.gz *
+            cd ../..
+          fi
+          # Package Windows binaries
+          if [ -d "artifacts/binaries-windows-x86_64" ]; then
+            cd artifacts/binaries-windows-x86_64
+            zip ../../release-files/rustdesk-server-windows-x86_64.zip *
+            cd ../..
+          fi
+          # Copy macOS packages (already in correct format)
+          find artifacts -name "*.tar.gz" | while read file; do
             cp "$file" release-files/
           done
           ls -la release-files/
