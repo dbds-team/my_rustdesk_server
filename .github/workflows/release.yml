@@ -22,8 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          - { name: "x86_64", target: "x86_64-unknown-linux-musl" }
-          - { name: "aarch64", target: "aarch64-unknown-linux-musl" }
+          - { name: "x86_64", target: "x86_64-unknown-linux-gnu" }
 
     steps:
       - name: Checkout
@@ -48,7 +47,6 @@ jobs:
         with:
           command: build
           args: --release --all-features --target=${{ matrix.job.target }}
-          use-cross: true
 
       - name: Make binaries executable
         run: chmod +x target/${{ matrix.job.target }}/release/*
@@ -142,15 +140,57 @@ jobs:
           if-no-files-found: error
 
   # macOS builds
-  build-macos:
-    name: Build macOS - ${{ matrix.job.name }}
-    runs-on: macos-14  # Apple Silicon runner for M1/M2 support
+  build-macos-intel:
+    name: Build macOS Intel
+    runs-on: macos-13  # Intel runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.81"
+          targets: x86_64-apple-darwin
+          components: rustfmt
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-apple-darwin
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-features --target=x86_64-apple-darwin
+
+      - name: Make binaries executable
+        run: chmod +x target/x86_64-apple-darwin/release/*
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cd target/x86_64-apple-darwin/release
+          tar -czf ../../../dist/rustdesk-server-macos-x86_64.tar.gz hbbr hbbs rustdesk-utils
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: dist/rustdesk-server-macos-x86_64.tar.gz
+          if-no-files-found: error
+
+  build-macos-silicon:
+    name: Build macOS Apple Silicon
+    runs-on: macos-14  # Apple Silicon runner
     strategy:
       fail-fast: false
       matrix:
         job:
-          - { name: "x86_64", target: "x86_64-apple-darwin" }
-          - { name: "aarch64", target: "aarch64-apple-darwin" }  # Apple Silicon (M1/M2)
+          - { name: "aarch64", target: "aarch64-apple-darwin" }
 
     steps:
       - name: Checkout
@@ -195,7 +235,7 @@ jobs:
   # Create GitHub Release
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows, build-macos-intel, build-macos-silicon]
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/')
 
