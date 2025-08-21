@@ -118,13 +118,13 @@ jobs:
           cd ui
           rustup default stable
           cargo build --release
-          Copy-Item -Path "../target/${{ matrix.job.target }}/release/*.exe" -Destination "setup/bin/" -Force
-          Copy-Item -Path "target/release/*.exe" -Destination "setup/" -Force
+          Get-ChildItem -Path "../target/${{ matrix.job.target }}/release/" -Filter "*.exe" | Copy-Item -Destination "setup/bin/" -Force
+          Get-ChildItem -Path "target/release/" -Filter "*.exe" | Copy-Item -Destination "setup/" -Force
           New-Item -ItemType Directory -Path "setup/logs" -Force
           makensis /V1 setup.nsi
           New-Item -ItemType Directory -Path "SignOutput" -Force
           Move-Item -Path "RustDeskServer.Setup.exe" -Destination "SignOutput/"
-          Copy-Item -Path "../target/${{ matrix.job.target }}/release/*.exe" -Destination "SignOutput/" -Force
+          Get-ChildItem -Path "../target/${{ matrix.job.target }}/release/" -Filter "*.exe" | Copy-Item -Destination "SignOutput/" -Force
 
       - name: Package binaries
         run: |
