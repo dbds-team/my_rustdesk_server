@@ -1,0 +1,252 @@
+name: Cross-platform Build and Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+  LATEST_TAG: latest
+
+jobs:
+  # Linux builds
+  build-linux:
+    name: Build Linux - ${{ matrix.job.name }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { name: "x86_64", target: "x86_64-unknown-linux-musl" }
+          - { name: "aarch64", target: "aarch64-unknown-linux-musl" }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.81"
+          targets: ${{ matrix.job.target }}
+          components: rustfmt
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-features --target=${{ matrix.job.target }}
+          use-cross: true
+
+      - name: Make binaries executable
+        run: chmod +x target/${{ matrix.job.target }}/release/*
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cd target/${{ matrix.job.target }}/release
+          tar -czf ../../../dist/rustdesk-server-linux-${{ matrix.job.name }}.tar.gz hbbr hbbs rustdesk-utils
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.job.name }}
+          path: dist/rustdesk-server-linux-${{ matrix.job.name }}.tar.gz
+          if-no-files-found: error
+
+  # Windows builds
+  build-windows:
+    name: Build Windows - ${{ matrix.job.name }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { name: "x86_64", target: "x86_64-pc-windows-msvc" }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.81"
+          targets: ${{ matrix.job.target }}
+          components: rustfmt
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-features --target=${{ matrix.job.target }}
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Build UI
+        run: |
+          cd ui/html
+          npm install
+          npm run build
+
+      - name: Build UI installer
+        run: |
+          cd ui
+          rustup default stable
+          cargo build --release
+          Copy-Item -Path "../target/${{ matrix.job.target }}/release/*.exe" -Destination "setup/bin/" -Force
+          Copy-Item -Path "target/release/*.exe" -Destination "setup/" -Force
+          New-Item -ItemType Directory -Path "setup/logs" -Force
+          makensis /V1 setup.nsi
+          New-Item -ItemType Directory -Path "SignOutput" -Force
+          Move-Item -Path "RustDeskServer.Setup.exe" -Destination "SignOutput/"
+          Copy-Item -Path "../target/${{ matrix.job.target }}/release/*.exe" -Destination "SignOutput/" -Force
+
+      - name: Package binaries
+        run: |
+          mkdir dist
+          cd ui/SignOutput
+          Compress-Archive -Path "*.exe" -DestinationPath "../../dist/rustdesk-server-windows-${{ matrix.job.name }}.zip"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.job.name }}
+          path: dist/rustdesk-server-windows-${{ matrix.job.name }}.zip
+          if-no-files-found: error
+
+  # macOS builds
+  build-macos:
+    name: Build macOS - ${{ matrix.job.name }}
+    runs-on: macos-14  # Apple Silicon runner for M1/M2 support
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { name: "x86_64", target: "x86_64-apple-darwin" }
+          - { name: "aarch64", target: "aarch64-apple-darwin" }  # Apple Silicon (M1/M2)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.81"
+          targets: ${{ matrix.job.target }}
+          components: rustfmt
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-features --target=${{ matrix.job.target }}
+
+      - name: Make binaries executable
+        run: chmod +x target/${{ matrix.job.target }}/release/*
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cd target/${{ matrix.job.target }}/release
+          tar -czf ../../../dist/rustdesk-server-macos-${{ matrix.job.name }}.tar.gz hbbr hbbs rustdesk-utils
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.job.name }}
+          path: dist/rustdesk-server-macos-${{ matrix.job.name }}.tar.gz
+          if-no-files-found: error
+
+  # Create GitHub Release
+  release:
+    name: Create GitHub Release
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          find artifacts -name "*.tar.gz" -o -name "*.zip" | while read file; do
+            cp "$file" release-files/
+          done
+          ls -la release-files/
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: RustDesk Server ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          files: release-files/*
+          generate_release_notes: true
+          body: |
+            ## RustDesk Server Release ${{ steps.version.outputs.version }}
+            
+            ### 支持的平台
+            - **Linux**: x86_64, aarch64 (ARM64)
+            - **Windows**: x86_64 (包含安装程序)
+            - **macOS**: x86_64 (Intel), aarch64 (Apple Silicon M1/M2)
+            
+            ### 下载说明
+            - Linux 和 macOS 版本为 tar.gz 压缩包
+            - Windows 版本为 zip 压缩包，包含可执行文件和安装程序
+            
+            ### 使用方法
+            1. 下载对应平台的压缩包
+            2. 解压后运行相应的可执行文件
+            3. 详细配置请参考项目 README
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
